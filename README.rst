@@ -16,6 +16,129 @@
     :alt: Pypi Downloads
     :target: https://pepy.tech/project/markdownify
 
+Slack Format Support
+====================
+
+The library now supports Slack's markdown format (mrkdwn) using the new **flavor** option, which provides a clean and extensible API for different markdown formats.
+
+Flavor Option
+-------------
+
+The ``flavor`` parameter controls the overall markdown format:
+
+* ``flavor='standard'`` (default) - GitHub/CommonMark compatible markdown
+* ``flavor='slack'`` - Slack mrkdwn format
+
+**Programmatic Usage**::
+
+    import markdownify
+    
+    html = '<b>Bold</b> and <em>italic</em> text with <a href="https://example.com">a link</a>'
+    
+    # Standard markdown (default)
+    standard = markdownify.markdownify(html)
+    # Output: **Bold** and *italic* text with [a link](https://example.com)
+    
+    # Slack format using new flavor option
+    slack = markdownify.markdownify(html, flavor='slack')
+    # Output: *Bold* and _italic_ text with <https://example.com|a link>
+
+**Command Line Usage**::
+
+    # Standard markdown (default)
+    echo '<b>Hello</b>' | markdownify
+    # Output: **Hello**
+    
+    # Slack format using flavor option
+    echo '<b>Hello</b>' | markdownify --flavor slack
+    # Output: *Hello*
+
+Key Differences from Standard Markdown
+--------------------------------------
+
+* **Bold**: Uses single asterisks ``*text*`` instead of double ``**text**``
+* **Italic**: Uses underscores ``_text_`` only (no asterisks)
+* **Strikethrough**: Uses single tildes ``~text~`` instead of double ``~~text~~``
+* **Links**: Uses angle bracket format ``<url|text>`` instead of ``[text](url)``
+* **Escaping**: Uses HTML entities (``&amp;``, ``&lt;``, ``&gt;``) for special characters
+
+Slack-Specific Features
+-----------------------
+
+The Slack format also supports platform-specific features through special HTML attributes:
+
+**User Mentions**::
+
+    html = '<a href="#" data-slack-user="U123456">@john</a>'
+    result = markdownify.markdownify(html, flavor='slack')
+    # Output: <@U123456>
+
+**Channel Links**::
+
+    html = '<a href="#" data-slack-channel="C123456">#general</a>'
+    result = markdownify.markdownify(html, flavor='slack')
+    # Output: <#C123456>
+
+**Special Mentions**::
+
+    html = '<span data-slack-mention="here">@here</span>'
+    result = markdownify.markdownify(html, flavor='slack')
+    # Output: <!here>
+    
+    # Also supports: channel, everyone, and subteam mentions
+
+**Date Formatting**::
+
+    html = '<span data-slack-timestamp="1392734382" data-slack-format="{date}" data-slack-fallback="Feb 18, 2014">Feb 18</span>'
+    result = markdownify.markdownify(html, flavor='slack')
+    # Output: <!date^1392734382^{date}|Feb 18, 2014>
+
+Configuration Options
+---------------------
+
+flavor
+  Controls the overall markdown format. Options are ``'standard'`` (default) for GitHub/CommonMark 
+  compatible markdown, or ``'slack'`` for Slack mrkdwn format.
+
+slack_user_mentions
+  Enable conversion of elements with ``data-slack-user`` attributes to user mentions.
+  Defaults to ``True``.
+
+slack_channel_links
+  Enable conversion of elements with ``data-slack-channel`` attributes to channel links.
+  Defaults to ``True``.
+
+slack_disable_headers
+  Disable header conversion for H3+ (only allow H1/H2). Defaults to ``False``.
+
+slack_disable_tables
+  Disable table conversion (Slack doesn't support markdown tables). Defaults to ``True``.
+
+slack_disable_lists
+  Use manual list formatting with bullets (•) instead of markdown lists. Defaults to ``False``.
+
+Command Line Usage
+------------------
+
+The Slack format is also available through the command line interface::
+
+    # Using flavor option
+    markdownify --flavor slack input.html
+    
+    # With additional options
+    markdownify --flavor slack --slack-disable-headers --slack-disable-lists input.html
+    
+    # Pipe usage
+    echo '<b>Bold</b> text' | markdownify --flavor slack
+
+Available CLI flags:
+  * ``--flavor {standard,slack}``: Choose markdown format
+  * ``--slack-disable-headers``: Disable headers beyond H2
+  * ``--slack-disable-tables``: Disable table formatting
+  * ``--slack-disable-lists``: Use manual list formatting
+  * ``--no-slack-user-mentions``: Disable user mention conversion
+  * ``--no-slack-channel-links``: Disable channel link conversion
+
 Installation
 ============
 

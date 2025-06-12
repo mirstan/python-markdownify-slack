@@ -4,7 +4,7 @@ import argparse
 import sys
 
 from markdownify import markdownify, ATX, ATX_CLOSED, UNDERLINED, \
-    SPACES, BACKSLASH, ASTERISK, UNDERSCORE
+    SPACES, BACKSLASH, ASTERISK, UNDERSCORE, SLACK
 
 
 def main(argv=sys.argv[1:]):
@@ -76,6 +76,26 @@ def main(argv=sys.argv[1:]):
                         help="Specify the Beautiful Soup parser to be used for interpreting HTML markup. Parsers such "
                              "as html5lib, lxml or even a custom parser as long as it is installed on the execution "
                              "environment.")
+    
+    # Flavor option - controls overall markdown format  
+    parser.add_argument('--flavor', default='standard',
+                        choices=['standard', 'slack'],
+                        help="Markdown flavor to use: 'standard' for GitHub/CommonMark, 'slack' for Slack mrkdwn")
+    
+    # Slack-specific options
+    parser.add_argument('--slack-disable-headers', action='store_true',
+                        help="Disable header conversion in Slack format")
+    parser.add_argument('--slack-disable-tables', action='store_true', 
+                        default=True,
+                        help="Disable table conversion in Slack format")
+    parser.add_argument('--slack-disable-lists', action='store_true',
+                        help="Use manual list formatting instead of markdown lists")
+    parser.add_argument('--no-slack-user-mentions', dest='slack_user_mentions',
+                        action='store_false',
+                        help="Disable user mention conversion in Slack format")
+    parser.add_argument('--no-slack-channel-links', dest='slack_channel_links',
+                        action='store_false',
+                        help="Disable channel link conversion in Slack format")
 
     args = parser.parse_args(argv)
     print(markdownify(**vars(args)))

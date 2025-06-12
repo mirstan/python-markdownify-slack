@@ -51,6 +51,9 @@ BACKSLASH = 'backslash'
 ASTERISK = '*'
 UNDERSCORE = '_'
 
+# Format styles
+SLACK = 'slack'
+
 # Document strip styles
 LSTRIP = 'lstrip'
 RSTRIP = 'rstrip'
@@ -174,6 +177,15 @@ class MarkdownConverter(object):
         table_infer_header = False
         wrap = False
         wrap_width = 80
+        # Flavor options - controls overall markdown format
+        flavor = 'standard'  # 'standard' or 'slack'
+        
+        # Slack-specific options
+        slack_user_mentions = True
+        slack_channel_links = True
+        slack_disable_headers = False
+        slack_disable_tables = True
+        slack_disable_lists = False
 
     class Options(DefaultOptions):
         pass
@@ -190,6 +202,14 @@ class MarkdownConverter(object):
 
         # Initialize the conversion function cache
         self.convert_fn_cache = {}
+        
+        # Cache for Slack-specific validations to improve performance
+        self._slack_id_cache = {}
+        self._url_cache = {}
+        
+    def _is_slack_flavor(self):
+        """Check if current flavor is Slack"""
+        return self.options['flavor'] == 'slack'
 
     def convert(self, html):
         soup = BeautifulSoup(html, self.options['beautiful_soup_parser'])
@@ -392,6 +412,14 @@ class MarkdownConverter(object):
     def escape(self, text, parent_tags):
         if not text:
             return ''
+        
+        if self._is_slack_flavor():
+            # Slack uses HTML entities for special characters
+            text = text.replace('&', '&amp;')
+            text = text.replace('<', '&lt;')
+            text = text.replace('>', '&gt;')
+            return text
+        
         if self.options['escape_misc']:
             text = re_escape_misc_chars.sub(r'\\\1', text)
             text = re_escape_misc_dash_sequences.sub(r'\1\\\2', text)
@@ -416,6 +444,35 @@ class MarkdownConverter(object):
             return ''
         href = el.get('href')
         title = el.get('title')
+        
+        if self._is_slack_flavor():
+            # Handle Slack-specific link formatting with validation
+            user_id = el.get('data-slack-user')
+            channel_id = el.get('data-slack-channel')
+            
+            if user_id and user_id.strip():  # Check for non-empty user ID
+                if self.options['slack_user_mentions'] and self._is_valid_slack_id(user_id, 'U'):
+                    return f'{prefix}<@{user_id}>{suffix}'
+                else:
+                    return f'{prefix}{text}{suffix}'  # Return just the text when disabled or invalid
+            elif channel_id and channel_id.strip():  # Check for non-empty channel ID
+                if self.options['slack_channel_links'] and self._is_valid_slack_id(channel_id, 'C'):
+                    return f'{prefix}<#{channel_id}>{suffix}'
+                else:
+                    return f'{prefix}{text}{suffix}'  # Return just the text when disabled or invalid
+            elif href:
+                # Validate URL format for Slack
+                if self._is_valid_url(href):
+                    if text == href or text.replace(r'\_', '_') == href:
+                        return f'{prefix}<{href}>{suffix}'
+                    else:
+                        return f'{prefix}<{href}|{text}>{suffix}'
+                else:
+                    # Invalid URL, fall back to text
+                    return f'{prefix}{text}{suffix}'
+            return f'{prefix}{text}{suffix}'
+        
+        # Standard markdown link formatting
         # For the replacement see #29: text nodes underscores are escaped
         if (self.options['autolinks']
                 and text.replace(r'\_', '_') == href
@@ -428,7 +485,23 @@ class MarkdownConverter(object):
         title_part = ' "%s"' % title.replace('"', r'\"') if title else ''
         return '%s[%s](%s%s)%s' % (prefix, text, href, title_part, suffix) if href else text
 
-    convert_b = abstract_inline_conversion(lambda self: 2 * self.options['strong_em_symbol'])
+    def get_bold_markup(self):
+        if self._is_slack_flavor():
+            return '*'  # Single asterisk for Slack
+        else:
+            return 2 * self.options['strong_em_symbol']  # Standard markdown
+    
+    def _handle_nested_formatting(self, text, parent_tags):
+        """Handle nested formatting conflicts in Slack format"""
+        if not self._is_slack_flavor():
+            return text
+            
+        # In Slack, nested formatting can conflict, so we need to be careful
+        # For now, we'll just return the text as-is, but this could be enhanced
+        # to handle specific nesting rules
+        return text
+
+    convert_b = abstract_inline_conversion(lambda self: self.get_bold_markup())
 
     def convert_blockquote(self, el, text, parent_tags):
         # handle some early-exit scenarios
@@ -461,7 +534,13 @@ class MarkdownConverter(object):
         converter = abstract_inline_conversion(lambda self: '`')
         return converter(self, el, text, parent_tags)
 
-    convert_del = abstract_inline_conversion(lambda self: '~~')
+    def get_strikethrough_markup(self):
+        if self._is_slack_flavor():
+            return '~'  # Single tilde for Slack
+        else:
+            return '~~'  # Double tilde for standard markdown
+
+    convert_del = abstract_inline_conversion(lambda self: self.get_strikethrough_markup())
 
     def convert_div(self, el, text, parent_tags):
         if '_inline' in parent_tags:
@@ -473,7 +552,13 @@ class MarkdownConverter(object):
 
     convert_section = convert_div
 
-    convert_em = abstract_inline_conversion(lambda self: self.options['strong_em_symbol'])
+    def get_italic_markup(self):
+        if self._is_slack_flavor():
+            return '_'  # Only underscores for Slack
+        else:
+            return self.options['strong_em_symbol']
+
+    convert_em = abstract_inline_conversion(lambda self: self.get_italic_markup())
 
     convert_kbd = convert_code
 
@@ -519,6 +604,11 @@ class MarkdownConverter(object):
         if '_inline' in parent_tags:
             return text
 
+        # Handle Slack format header restrictions
+        if self._is_slack_flavor() and self.options['slack_disable_headers']:
+            # In Slack format, disable all headers when option is enabled
+            return f'\n\n{text.strip()}\n\n'  # Just return as plain text
+        
         # Markdown does not support heading depths of n > 6
         n = max(1, min(6, n))
 
@@ -590,6 +680,21 @@ class MarkdownConverter(object):
         if not text:
             return "\n"
 
+        if self._is_slack_flavor() and self.options['slack_disable_lists']:
+            # Manual list formatting for Slack
+            parent = el.parent
+            if parent is not None and parent.name == 'ol':
+                # Simple numbering without special markdown
+                start = 1
+                if parent.get("start") and str(parent.get("start")).isnumeric():
+                    start = int(parent.get("start"))
+                num = start + len(el.find_previous_siblings('li'))
+                return f'{num}. {text}\n'
+            else:
+                # Simple bullet without special markdown
+                return f'• {text}\n'
+
+        # Standard markdown list handling
         # determine list item bullet character to use
         parent = el.parent
         if parent is not None and parent.name == 'ol':
@@ -651,6 +756,12 @@ class MarkdownConverter(object):
 
         if self.options['code_language_callback']:
             code_language = self.options['code_language_callback'](el) or code_language
+        
+        # Handle Slack-specific code block attributes
+        if self._is_slack_flavor():
+            slack_lang = el.get('data-slack-lang')
+            if slack_lang:
+                code_language = slack_lang
 
         return '\n\n```%s\n%s\n```\n\n' % (code_language, text)
 
@@ -674,6 +785,11 @@ class MarkdownConverter(object):
     convert_sup = abstract_inline_conversion(lambda self: self.options['sup_symbol'])
 
     def convert_table(self, el, text, parent_tags):
+        if self._is_slack_flavor() and self.options['slack_disable_tables']:
+            # Convert table to simple text format for Slack
+            return f'\n\n{text.strip()}\n\n'
+        
+        # Standard markdown table formatting
         return '\n\n' + text.strip() + '\n\n'
 
     def convert_caption(self, el, text, parent_tags):
@@ -738,6 +854,116 @@ class MarkdownConverter(object):
             overline += '| ' + ' | '.join([''] * full_colspan) + ' |' + '\n'
             overline += '| ' + ' | '.join(['---'] * full_colspan) + ' |' + '\n'
         return overline + '|' + text + '\n' + underline
+
+    def _is_valid_url(self, url):
+        """Basic URL validation for Slack links with caching"""
+        if not url or not isinstance(url, str):
+            return False
+            
+        # Check cache first for performance
+        if url in self._url_cache:
+            return self._url_cache[url]
+        
+        # Basic URL validation - must start with http/https or be a relative URL
+        url_stripped = url.strip()
+        if not url_stripped:
+            self._url_cache[url] = False
+            return False
+            
+        # Allow common URL schemes
+        valid_schemes = ['http://', 'https://', 'ftp://', 'mailto:', 'tel:']
+        is_valid = (
+            any(url_stripped.startswith(scheme) for scheme in valid_schemes) or
+            url_stripped.startswith('/') or  # Allow relative URLs
+            url_stripped.startswith('#')     # Allow anchor links
+        )
+        
+        # Cache the result
+        self._url_cache[url] = is_valid
+        return is_valid
+
+    def _is_valid_slack_id(self, slack_id, prefix=None):
+        """Validate Slack ID format with caching"""
+        if not slack_id or not isinstance(slack_id, str):
+            return False
+        
+        # Create cache key
+        cache_key = f"{slack_id}:{prefix or ''}"
+        if cache_key in self._slack_id_cache:
+            return self._slack_id_cache[cache_key]
+        
+        # Basic validation: should be alphanumeric and start with correct prefix
+        is_valid = True
+        if prefix and not slack_id.startswith(prefix):
+            is_valid = False
+        elif len(slack_id) < 2 or len(slack_id) > 15:
+            # Slack IDs can vary in length, but should be reasonable
+            is_valid = False
+        elif not slack_id.isalnum():
+            is_valid = False
+            
+        # Cache the result
+        self._slack_id_cache[cache_key] = is_valid
+        return is_valid
+
+    def convert_slack_mention(self, el, text, parent_tags):
+        """Handle special Slack mention elements with validation"""
+        if not self._is_slack_flavor():
+            return text
+            
+        mention_type = el.get('data-slack-mention')
+        if not mention_type:
+            return text
+            
+        # Validate and convert mention types
+        if mention_type == 'here':
+            return '<!here>'
+        elif mention_type == 'channel':
+            return '<!channel>'
+        elif mention_type == 'everyone':
+            return '<!everyone>'
+        elif mention_type == 'subteam':
+            subteam_id = el.get('data-slack-subteam')
+            if subteam_id and self._is_valid_slack_id(subteam_id, 'S'):
+                return f'<!subteam^{subteam_id}>'
+            else:
+                return text  # Invalid subteam ID, return original text
+        else:
+            # Unknown mention type, return original text
+            return text
+
+    def convert_slack_date(self, el, text, parent_tags):
+        """Handle Slack date formatting elements"""
+        if not self._is_slack_flavor():
+            return text
+            
+        timestamp = el.get('data-slack-timestamp')
+        date_format = el.get('data-slack-format', '{date}')
+        fallback = el.get('data-slack-fallback', text)
+        link = el.get('data-slack-link', '')
+        
+        if timestamp:
+            if link:
+                return f'<!date^{timestamp}^{date_format}^{link}|{fallback}>'
+            else:
+                return f'<!date^{timestamp}^{date_format}|{fallback}>'
+        
+        return text
+
+    # Add convert functions for span elements that might contain Slack special mentions
+    def convert_span(self, el, text, parent_tags):
+        """Handle span elements, checking for Slack special attributes"""
+        if self._is_slack_flavor():
+            # Check for Slack special mentions
+            if el.get('data-slack-mention'):
+                return self.convert_slack_mention(el, text, parent_tags)
+            elif el.get('data-slack-timestamp'):
+                return self.convert_slack_date(el, text, parent_tags)
+        
+        # Default span behavior - just return the text
+        if '_inline' in parent_tags:
+            return ' ' + text.strip() + ' '
+        return text.strip()
 
 
 def markdownify(html, **options):
