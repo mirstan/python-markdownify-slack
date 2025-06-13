@@ -450,16 +450,18 @@ class MarkdownConverter(object):
             user_id = el.get('data-slack-user')
             channel_id = el.get('data-slack-channel')
             
-            if user_id and user_id.strip():  # Check for non-empty user ID
-                if self.options['slack_user_mentions'] and self._is_valid_slack_id(user_id, 'U'):
+            # If we have Slack attributes (even empty ones), prioritize Slack handling
+            if user_id is not None:  # data-slack-user attribute exists
+                if user_id.strip() and self.options['slack_user_mentions'] and self._is_valid_slack_id(user_id, 'U'):
                     return f'{prefix}<@{user_id}>{suffix}'
                 else:
-                    return f'{prefix}{text}{suffix}'  # Return just the text when disabled or invalid
-            elif channel_id and channel_id.strip():  # Check for non-empty channel ID
-                if self.options['slack_channel_links'] and self._is_valid_slack_id(channel_id, 'C'):
+                    return f'{prefix}{text}{suffix}'  # Return just the text when empty, disabled, or invalid
+            elif channel_id is not None:  # data-slack-channel attribute exists
+                if channel_id.strip() and self.options['slack_channel_links'] and self._is_valid_slack_id(channel_id, 'C'):
                     return f'{prefix}<#{channel_id}>{suffix}'
                 else:
-                    return f'{prefix}{text}{suffix}'  # Return just the text when disabled or invalid
+                    return f'{prefix}{text}{suffix}'  # Return just the text when empty, disabled, or invalid
+            # Only process URLs if no Slack attributes are present
             elif href:
                 # Validate URL format for Slack
                 if self._is_valid_url(href):
@@ -470,6 +472,7 @@ class MarkdownConverter(object):
                 else:
                     # Invalid URL, fall back to text
                     return f'{prefix}{text}{suffix}'
+            # No special attributes, just return text
             return f'{prefix}{text}{suffix}'
         
         # Standard markdown link formatting
@@ -729,7 +732,16 @@ class MarkdownConverter(object):
     def convert_p(self, el, text, parent_tags):
         if '_inline' in parent_tags:
             return ' ' + text.strip(' \t\r\n') + ' '
+        
+        # Check if we have only whitespace content
+        original_text = text
         text = text.strip(' \t\r\n')
+        
+        # If we had content (even if just whitespace) but now have empty string,
+        # preserve the paragraph structure
+        if not text and original_text and original_text.strip() == '':
+            return '\n\n\n\n'  # Empty paragraph with whitespace should still create structure
+        
         if self.options['wrap']:
             # Preserve newlines (and preceding whitespace) resulting
             # from <br> tags.  Newlines in the input have already been
@@ -750,10 +762,35 @@ class MarkdownConverter(object):
         return '\n\n%s\n\n' % text if text else ''
 
     def convert_pre(self, el, text, parent_tags):
-        if not text:
+        if not el:
             return ''
+        
+        # For pre blocks, we need to preserve all whitespace exactly as it appears
+        # in the original HTML, so we extract the raw text content directly
+        # rather than relying on the processed text which may have been normalized
+        
+        def extract_raw_text(element):
+            """Extract raw text content from element, preserving all whitespace"""
+            if isinstance(element, NavigableString):
+                return six.text_type(element)
+            elif hasattr(element, 'children'):
+                # Recursively extract text from all children
+                return ''.join(extract_raw_text(child) for child in element.children)
+            else:
+                return ''
+        
+        # Extract the raw text content, preserving all whitespace
+        raw_text = extract_raw_text(el)
+        
+        # Only escape special characters if we're not in a _noformat context
+        # (pre blocks should not escape markdown characters)
+        if '_noformat' not in parent_tags:
+            # For pre blocks, we typically want to preserve the content as-is
+            # without escaping, since it's meant to be literal
+            pass
+        
+        # Handle code language detection
         code_language = self.options['code_language']
-
         if self.options['code_language_callback']:
             code_language = self.options['code_language_callback'](el) or code_language
         
@@ -763,7 +800,7 @@ class MarkdownConverter(object):
             if slack_lang:
                 code_language = slack_lang
 
-        return '\n\n```%s\n%s\n```\n\n' % (code_language, text)
+        return '\n\n```%s\n%s\n```\n\n' % (code_language, raw_text)
 
     def convert_q(self, el, text, parent_tags):
         return '"' + text + '"'
@@ -960,7 +997,11 @@ class MarkdownConverter(object):
             elif el.get('data-slack-timestamp'):
                 return self.convert_slack_date(el, text, parent_tags)
         
-        # Default span behavior - just return the text
+        # For span elements inside pre blocks, preserve the text exactly
+        if 'pre' in parent_tags or '_noformat' in parent_tags:
+            return text
+        
+        # Default span behavior - just return the text with proper spacing
         if '_inline' in parent_tags:
             return ' ' + text.strip() + ' '
         return text.strip()

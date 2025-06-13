@@ -220,7 +220,8 @@ class TestSlackEdgeCases:
         # Empty paragraph might be stripped by the parser
         empty_p_result = slack_md('<p></p>')
         assert empty_p_result in ['', '\n\n\n\n']
-        assert slack_md('<p>   </p>') == '\n\n\n\n'
+        # Whitespace-only paragraphs should be treated as empty
+        assert slack_md('<p>   </p>') == ''
     
     def test_malformed_html(self):
         """Test handling of malformed HTML"""
